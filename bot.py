@@ -1,138 +1,180 @@
 import os
 import time
 import threading
-import logging
+from datetime import datetime, timedelta
+from pyrogram import Client, filters
+from pyrogram.types import Message
+from apscheduler.schedulers.background import BackgroundScheduler
+from dotenv import load_dotenv
 from flask import Flask
-from datetime import datetime
-from telegram import Bot, Update
-from telegram.ext import (
-    Application, 
-    CommandHandler, 
-    MessageHandler, 
-    filters
-)
 
-# 🚀 BOT CONFIGURATION
-TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = "@TOOLS_BOTS_KING"  # Force join channel
-LOG_CHANNEL_ID = -1002661069692  # Your log channel
+# Load environment variables from .env file
+load_dotenv()
 
-# ⚙️ SETTINGS
+# Bot credentials
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))  # Channel where users must join
+LOG_CHANNEL_ID = int(os.getenv("LOG_CHANNEL_ID"))  # Admin log channel
+
+# Message limits
 DAILY_LIMIT = 5  # Max messages per day per user
-COOLDOWN_TIME = 30  # Cooldown in seconds
-MESSAGE_LIFETIME = 600  # Self-destruct after 10 minutes (600 sec)
+COOLDOWN_TIME = 30  # Cooldown time in seconds
+MESSAGE_LIFETIME = 600  # Auto-delete messages after 10 minutes (600 sec)
 
-# 🔥 STORAGE
-message_count = {}
-last_message_time = {}
+# Initialize the bot
+bot = Client("anon_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# 🌐 Flask App for 24/7 Hosting on Koyeb
+# Dictionary to track user limits
+user_limits = {}
+cooldown_tracker = {}
+
+# Background scheduler for resetting daily limits
+scheduler = BackgroundScheduler()
+scheduler.add_job(lambda: user_limits.clear(), 'cron', hour=0, minute=0)
+scheduler.start()
+
+# Flask app for 24/7 hosting
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Anonymous Revenge Message Bot is Running! 🚀"
+    return "Anonymous Bot is running!"
 
-# ✅ CHECK IF USER IS SUBSCRIBED TO THE CHANNEL
-async def is_user_subscribed(user_id: int, bot: Bot):
+# Function to check if the user is subscribed to the required channel
+async def is_user_subscribed(user_id):
     try:
-        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        member = await bot.get_chat_member(CHANNEL_ID, user_id)
         return member.status in ["member", "administrator", "creator"]
-    except:
+    except Exception:
         return False
 
-# 🚫 FORCE JOIN MESSAGE
-async def force_join(update: Update):
-    await update.message.reply_text(
-        f"🚨 *You must join our channel to use this bot!*\n"
-        f"➡️ [Join Now](https://t.me/{CHANNEL_USERNAME[1:]})\n"
-        f"✅ Then click /start again.",
-        parse_mode="Markdown",
-        disable_web_page_preview=True
+# Function to force users to join before using the bot
+async def force_join(message: Message):
+    await message.reply_text(
+        "❌ You must join our channel before using this bot.\n"
+        f"🔗 [Click Here to Join](https://t.me/{CHANNEL_ID})",
+        disable_web_page_preview=True,
     )
 
-# 🏁 START COMMAND
-async def start(update: Update, context):
-    user_id = update.message.chat_id
-    bot = context.bot
+# Function to delete messages after a set time
+def delete_message_later(chat_id, message_id, delay):
+    time.sleep(delay)
+    try:
+        bot.delete_messages(chat_id, message_id)
+    except Exception:
+        pass
 
-    if not await is_user_subscribed(user_id, bot):
-        await force_join(update)
-        return
-
-    await update.message.reply_text(
-        "👻 *Welcome to Anonymous Message Bot!*\n\n"
-        "📩 Send messages anonymously to any Telegram user!\n"
-        "🕒 Messages **self-destruct** after 10 minutes.\n"
-        "📌 Use `/send @username your message` to send a message.\n",
-        parse_mode="Markdown"
+# Command: Start
+@bot.on_message(filters.command("start"))
+async def start_command(client, message):
+    await message.reply_text(
+        "👋 Welcome to the Anonymous Message Bot!\n"
+        "Send messages anonymously using `/send @username your message`"
     )
 
-# 📩 SEND ANONYMOUS MESSAGE
-async def send_anonymous_message(update: Update, context):
-    user_id = update.message.chat_id
-    bot = context.bot
+# Command: Send Anonymous Message
+@bot.on_message(filters.command("send"))
+async def send_anonymous_message(client, message):
+    user_id = message.from_user.id
 
-    if not await is_user_subscribed(user_id, bot):
-        await force_join(update)
+    # Check if user is subscribed
+    if not await is_user_subscribed(user_id):
+        await force_join(message)
         return
 
-    if user_id in last_message_time and (time.time() - last_message_time[user_id]) < COOLDOWN_TIME:
-        await update.message.reply_text(f"⏳ *Cooldown active!* Wait {COOLDOWN_TIME} sec.", parse_mode="Markdown")
+    # Check daily message limit
+    if user_id in user_limits and user_limits[user_id] >= DAILY_LIMIT:
+        await message.reply_text("❌ You've reached your daily limit for anonymous messages.")
         return
 
-    if user_id in message_count and message_count[user_id] >= DAILY_LIMIT:
-        await update.message.reply_text("🚫 *Daily limit reached!* Try again tomorrow.", parse_mode="Markdown")
+    # Check cooldown timer
+    last_message_time = cooldown_tracker.get(user_id, 0)
+    if time.time() - last_message_time < COOLDOWN_TIME:
+        remaining_time = int(COOLDOWN_TIME - (time.time() - last_message_time))
+        await message.reply_text(f"⏳ Please wait {remaining_time} seconds before sending another message.")
         return
 
-    if len(context.args) < 2:
-        await update.message.reply_text("❌ *Usage:* `/send @username your message`", parse_mode="Markdown")
+    # Validate message format
+    args = message.text.split(maxsplit=2)
+    if len(args) < 3:
+        await message.reply_text("❌ *Usage:* `/send @username your message`", parse_mode="Markdown")
         return
 
-    target_username = context.args[0]
-    message_text = " ".join(context.args[1:])
+    target_username = args[1]
+    message_text = args[2]
 
     try:
+        # Get recipient info
         target_user = await bot.get_chat(target_username)
+
+        # Send anonymous message
         sent_message = await bot.send_message(target_user.id, f"📩 *Anonymous Message:*\n\n{message_text}", parse_mode="Markdown")
 
-        # Auto-delete message after MESSAGE_LIFETIME seconds
-        threading.Timer(MESSAGE_LIFETIME, lambda: bot.delete_message(target_user.id, sent_message.message_id)).start()
+        # Schedule auto-delete
+        threading.Thread(target=delete_message_later, args=(target_user.id, sent_message.message_id, MESSAGE_LIFETIME)).start()
 
-        await update.message.reply_text("✅ *Message sent anonymously!*", parse_mode="Markdown")
+        await message.reply_text("✅ *Message sent anonymously!*", parse_mode="Markdown")
 
-        # Logging to Admin Channel
+        # Log message in admin channel
         log_text = (
             f"📬 *Anonymous Message Sent!*\n"
-            f"👤 *From:* {update.message.from_user.username} (ID: `{user_id}`)\n"
+            f"👤 *From:* {message.from_user.username} (ID: `{user_id}`)\n"
             f"🎯 *To:* {target_username}\n"
             f"📄 *Message:* {message_text}\n"
-            f"📅 *Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
+            f"📅 *Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
         await bot.send_message(LOG_CHANNEL_ID, log_text, parse_mode="Markdown")
 
-        # Update cooldown & daily limit
-        last_message_time[user_id] = time.time()
-        message_count[user_id] = message_count.get(user_id, 0) + 1
+        # Update user limits
+        user_limits[user_id] = user_limits.get(user_id, 0) + 1
+        cooldown_tracker[user_id] = time.time()
 
     except Exception as e:
-        await update.message.reply_text("❌ Failed to send message. User may have privacy settings enabled.", parse_mode="Markdown")
+        if "privacy" in str(e).lower():
+            await message.reply_text("❌ The user has privacy settings enabled. They need to /start the bot first.")
+        else:
+            await message.reply_text("❌ Failed to send the message. Please try again later.")
 
-# 🔥 RUN FLASK IN A SEPARATE THREAD
-def run_flask():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+# Command: Schedule Message
+@bot.on_message(filters.command("schedule"))
+async def schedule_message(client, message):
+    user_id = message.from_user.id
 
-# 🏁 MAIN FUNCTION
-def main():
-    # Run Flask in a separate thread
-    threading.Thread(target=run_flask, daemon=True).start()
+    # Check if user is subscribed
+    if not await is_user_subscribed(user_id):
+        await force_join(message)
+        return
 
-    application = Application.builder().token(TOKEN).build()
+    args = message.text.split(maxsplit=3)
+    if len(args) < 4:
+        await message.reply_text("❌ *Usage:* `/schedule @username HH:MM your message`", parse_mode="Markdown")
+        return
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("send", send_anonymous_message))
+    target_username, schedule_time, message_text = args[1], args[2], args[3]
 
-    application.run_polling()
+    try:
+        # Parse time
+        target_time = datetime.strptime(schedule_time, "%H:%M").time()
+        now = datetime.now().time()
+        if target_time <= now:
+            await message.reply_text("❌ Scheduled time must be in the future.")
+            return
 
+        # Schedule the message
+        def send_later():
+            bot.loop.create_task(send_anonymous_message(client, message))
+
+        delay = (datetime.combine(datetime.today(), target_time) - datetime.now()).seconds
+        threading.Timer(delay, send_later).start()
+
+        await message.reply_text(f"✅ *Message scheduled for {schedule_time}!*", parse_mode="Markdown")
+
+    except ValueError:
+        await message.reply_text("❌ Invalid time format. Use HH:MM.")
+
+# Start the bot
 if __name__ == "__main__":
-    main()
+    threading.Thread(target=app.run, kwargs={"host": "0.0.0.0", "port": 8080}).start()
+    bot.run()
