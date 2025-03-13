@@ -107,7 +107,7 @@ async def send_anonymous_message(update: Update, context):
             f"👤 *From:* {update.message.from_user.username} (ID: `{user_id}`)\n"
             f"🎯 *To:* {target_username}\n"
             f"📄 *Message:* {message_text}\n"
-            f"📅 *Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            f"📅 *Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} "
         )
         await bot.send_message(LOG_CHANNEL_ID, log_text, parse_mode="Markdown")
 
@@ -118,9 +118,14 @@ async def send_anonymous_message(update: Update, context):
     except Exception as e:
         await update.message.reply_text("❌ Failed to send message. User may have privacy settings enabled.", parse_mode="Markdown")
 
+# 🔥 RUN FLASK IN A SEPARATE THREAD
+def run_flask():
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
 # 🏁 MAIN FUNCTION
 def main():
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+    # Run Flask in a separate thread
+    threading.Thread(target=run_flask, daemon=True).start()
 
     application = Application.builder().token(TOKEN).build()
 
