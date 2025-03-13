@@ -2,11 +2,15 @@ import os
 import time
 import threading
 import logging
-import requests
 from flask import Flask
-from datetime import datetime, timedelta
-from telegram import Update, Bot
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from datetime import datetime
+from telegram import Bot, Update
+from telegram.ext import (
+    Application, 
+    CommandHandler, 
+    MessageHandler, 
+    filters
+)
 
 # 🚀 BOT CONFIGURATION
 TOKEN = os.getenv("BOT_TOKEN")
@@ -29,111 +33,73 @@ app = Flask(__name__)
 def home():
     return "Anonymous Revenge Message Bot is Running! 🚀"
 
-bot = Bot(token=TOKEN)
-
 # ✅ CHECK IF USER IS SUBSCRIBED TO THE CHANNEL
-def is_user_subscribed(user_id):
+async def is_user_subscribed(user_id: int, bot: Bot):
     try:
-        member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
+        member = await bot.get_chat_member(CHANNEL_USERNAME, user_id)
         return member.status in ["member", "administrator", "creator"]
     except:
         return False
 
 # 🚫 FORCE JOIN MESSAGE
-def force_join(update: Update):
-    update.message.reply_text(
+async def force_join(update: Update):
+    await update.message.reply_text(
         f"🚨 *You must join our channel to use this bot!*\n"
-        f"➡️ [Join Now]({f'https://t.me/{CHANNEL_USERNAME[1:]}'})\n"
+        f"➡️ [Join Now](https://t.me/{CHANNEL_USERNAME[1:]})\n"
         f"✅ Then click /start again.",
         parse_mode="Markdown",
         disable_web_page_preview=True
     )
 
 # 🏁 START COMMAND
-def start(update: Update, context: CallbackContext):
+async def start(update: Update, context):
     user_id = update.message.chat_id
+    bot = context.bot
 
-    if not is_user_subscribed(user_id):
-        force_join(update)
+    if not await is_user_subscribed(user_id, bot):
+        await force_join(update)
         return
 
-    update.message.reply_text(
+    await update.message.reply_text(
         "👻 *Welcome to Anonymous Message Bot!*\n\n"
         "📩 Send messages anonymously to any Telegram user!\n"
         "🕒 Messages **self-destruct** after 10 minutes.\n"
-        "📌 Use `/send @username your message` to send a message.\n"
-        "🕓 Use `/schedule @username your message | HH:MM` to schedule a message.\n",
+        "📌 Use `/send @username your message` to send a message.\n",
         parse_mode="Markdown"
     )
 
-# ⏳ SCHEDULE MESSAGE HANDLER
-def schedule_message(update: Update, context: CallbackContext):
-    user_id = update.message.chat_id
-
-    if not is_user_subscribed(user_id):
-        force_join(update)
-        return
-
-    if len(context.args) < 4 or "|" not in update.message.text:
-        update.message.reply_text("❌ *Usage:* `/schedule @username your message | HH:MM`", parse_mode="Markdown")
-        return
-
-    parts = update.message.text.split("|")
-    message_content = parts[0].split(" ", 2)
-    schedule_time = parts[1].strip()
-
-    try:
-        target_username = message_content[1]
-        message_text = message_content[2]
-        target_user = bot.get_chat(target_username).id
-        send_time = datetime.strptime(schedule_time, "%H:%M").time()
-
-        current_time = datetime.now().time()
-        if send_time <= current_time:
-            update.message.reply_text("❌ Scheduled time must be in the future!", parse_mode="Markdown")
-            return
-
-        threading.Timer(
-            (datetime.combine(datetime.today(), send_time) - datetime.now()).total_seconds(),
-            lambda: send_anonymous_message(update, target_user, message_text, user_id)
-        ).start()
-
-        update.message.reply_text(f"✅ Message scheduled for {target_username} at {schedule_time}.", parse_mode="Markdown")
-
-    except Exception as e:
-        update.message.reply_text("❌ Invalid username or time format!", parse_mode="Markdown")
-
 # 📩 SEND ANONYMOUS MESSAGE
-def send_anonymous_message(update: Update, context: CallbackContext):
+async def send_anonymous_message(update: Update, context):
     user_id = update.message.chat_id
+    bot = context.bot
 
-    if not is_user_subscribed(user_id):
-        force_join(update)
+    if not await is_user_subscribed(user_id, bot):
+        await force_join(update)
         return
 
     if user_id in last_message_time and (time.time() - last_message_time[user_id]) < COOLDOWN_TIME:
-        update.message.reply_text(f"⏳ *Cooldown active!* Wait {COOLDOWN_TIME} sec.", parse_mode="Markdown")
+        await update.message.reply_text(f"⏳ *Cooldown active!* Wait {COOLDOWN_TIME} sec.", parse_mode="Markdown")
         return
 
     if user_id in message_count and message_count[user_id] >= DAILY_LIMIT:
-        update.message.reply_text("🚫 *Daily limit reached!* Try again tomorrow.", parse_mode="Markdown")
+        await update.message.reply_text("🚫 *Daily limit reached!* Try again tomorrow.", parse_mode="Markdown")
         return
 
     if len(context.args) < 2:
-        update.message.reply_text("❌ *Usage:* `/send @username your message`", parse_mode="Markdown")
+        await update.message.reply_text("❌ *Usage:* `/send @username your message`", parse_mode="Markdown")
         return
 
     target_username = context.args[0]
     message_text = " ".join(context.args[1:])
-    
+
     try:
-        target_user = bot.get_chat(target_username).id
-        sent_message = bot.send_message(target_user, f"📩 *Anonymous Message:*\n\n{message_text}", parse_mode="Markdown")
+        target_user = await bot.get_chat(target_username)
+        sent_message = await bot.send_message(target_user.id, f"📩 *Anonymous Message:*\n\n{message_text}", parse_mode="Markdown")
 
-        # Auto-delete message
-        threading.Timer(MESSAGE_LIFETIME, lambda: bot.delete_message(target_user, sent_message.message_id)).start()
+        # Auto-delete message after MESSAGE_LIFETIME seconds
+        threading.Timer(MESSAGE_LIFETIME, lambda: bot.delete_message(target_user.id, sent_message.message_id)).start()
 
-        update.message.reply_text("✅ *Message sent anonymously!*", parse_mode="Markdown")
+        await update.message.reply_text("✅ *Message sent anonymously!*", parse_mode="Markdown")
 
         # Logging to Admin Channel
         log_text = (
@@ -143,33 +109,25 @@ def send_anonymous_message(update: Update, context: CallbackContext):
             f"📄 *Message:* {message_text}\n"
             f"📅 *Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        bot.send_message(LOG_CHANNEL_ID, log_text, parse_mode="Markdown")
+        await bot.send_message(LOG_CHANNEL_ID, log_text, parse_mode="Markdown")
 
         # Update cooldown & daily limit
         last_message_time[user_id] = time.time()
         message_count[user_id] = message_count.get(user_id, 0) + 1
 
     except Exception as e:
-        update.message.reply_text("❌ Failed to send message. User may have privacy settings enabled.", parse_mode="Markdown")
+        await update.message.reply_text("❌ Failed to send message. User may have privacy settings enabled.", parse_mode="Markdown")
 
 # 🏁 MAIN FUNCTION
 def main():
-    # Start Flask server in a separate thread
-    threading.Thread(target=run_flask, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
 
-    updater = Updater(TOKEN, update_queue=True)
-    dp = updater.dispatcher
+    application = Application.builder().token(TOKEN).build()
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("send", send_anonymous_message))
-    dp.add_handler(CommandHandler("schedule", schedule_message))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("send", send_anonymous_message))
 
-    updater.start_polling()
-    updater.idle()
-
-# 🔥 Run Flask in a separate thread
-def run_flask():
-    app.run(host="0.0.0.0", port=5000)
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
