@@ -1,8 +1,8 @@
 import os
 import time
 import threading
-import requests
 import logging
+import requests
 from flask import Flask
 from datetime import datetime, timedelta
 from telegram import Update, Bot
@@ -29,7 +29,7 @@ app = Flask(__name__)
 def home():
     return "Anonymous Revenge Message Bot is Running! 🚀"
 
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=TOKEN)
 
 # ✅ CHECK IF USER IS SUBSCRIBED TO THE CHANNEL
 def is_user_subscribed(user_id):
@@ -154,7 +154,10 @@ def send_anonymous_message(update: Update, context: CallbackContext):
 
 # 🏁 MAIN FUNCTION
 def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
+    # Start Flask server in a separate thread
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    updater = Updater(TOKEN, update_queue=True)
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
@@ -162,6 +165,10 @@ def main():
     dp.add_handler(CommandHandler("schedule", schedule_message))
 
     updater.start_polling()
+    updater.idle()
+
+# 🔥 Run Flask in a separate thread
+def run_flask():
     app.run(host="0.0.0.0", port=5000)
 
 if __name__ == "__main__":
