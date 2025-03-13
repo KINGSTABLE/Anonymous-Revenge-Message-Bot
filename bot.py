@@ -9,7 +9,7 @@ from telegram import Update, Bot
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 
 # 🚀 BOT CONFIGURATION
-BOT_TOKEN = "8171336477:AAExfuZltHewACniQaDTUgDqW9gHfdqIfoc"
+TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_USERNAME = "@TOOLS_BOTS_KING"  # Force join channel
 LOG_CHANNEL_ID = -1002661069692  # Your log channel
 
